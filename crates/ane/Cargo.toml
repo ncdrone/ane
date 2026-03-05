@@ -4,6 +4,11 @@ version = "0.1.0"
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+description = "Rust bindings for the Apple Neural Engine (ANE) via the private AppleNeuralEngine.framework"
+repository = "https://github.com/computer-graphics-tools/ane"
+readme = "../../README.md"
+keywords = ["apple", "neural-engine", "ane", "machine-learning"]
+categories = ["api-bindings", "hardware-support"]
 build = "build.rs"
 
 [lib]
