@@ -109,5 +109,6 @@ pub(crate) fn compile_network(
     Ok(Executable {
         inner: model,
         qos: quality_of_service,
+        cached_request: std::cell::UnsafeCell::new(None),
     })
 }

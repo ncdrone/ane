@@ -72,24 +72,25 @@ pub(crate) fn emit_mil(ops: &[Op], shapes: &[(String, Shape)]) -> (String, Box<[
     out.push_str(MIL_BUILD_INFO);
     out.push_str("\n{\n");
 
+    // fp16 I/O: inputs and outputs are fp16 IOSurfaces.
+    // No cast ops needed — ANE natively operates in fp16.
+    // This halves DMA bandwidth and eliminates 2-3 cast ops per kernel.
     out.push_str("    func main<ios18>(");
     let sig_parts: Vec<String> = input_names
         .iter()
         .map(|name| {
             let shape = shape_map.get(name).copied().unwrap_or(Shape::channels(1));
-            format!("tensor<fp32, {}> {}", mil_shape(shape), name)
+            format!("tensor<fp16, {}> {}", mil_shape(shape), name)
         })
         .collect();
     out.push_str(&sig_parts.join(", "));
     out.push_str(") {\n");
 
-    out.push_str("        string _to_fp16 = const()[name = string(\"_to_fp16\"), val = string(\"fp16\")];\n");
-    out.push_str("        string _to_fp32 = const()[name = string(\"_to_fp32\"), val = string(\"fp32\")];\n");
-
+    // Input is already fp16 — create aliases with _f16 suffix for downstream ops
     for name in &input_names {
         let shape = shape_map.get(name).copied().unwrap_or(Shape::channels(1));
         out.push_str(&format!(
-            "        tensor<fp16, {s}> {n}_f16 = cast(dtype = _to_fp16, x = {n})[name = string(\"cast_{n}\")];\n",
+            "        tensor<fp16, {s}> {n}_f16 = identity(x = {n})[name = string(\"alias_{n}\")];\n",
             s = mil_shape(shape),
             n = name,
         ));
@@ -100,16 +101,9 @@ pub(crate) fn emit_mil(ops: &[Op], shapes: &[(String, Shape)]) -> (String, Box<[
         emit_layer(layer, &shape_map, &weight_blobs, &mut blob_index, &mut out);
     }
 
-    for name in &output_names {
-        let shape = shape_map.get(name).copied().unwrap_or(Shape::channels(1));
-        out.push_str(&format!(
-            "        tensor<fp32, {s}> {n} = cast(dtype = _to_fp32, x = {n}_f16)[name = string(\"cast_out_{n}\")];\n",
-            s = mil_shape(shape),
-            n = name,
-        ));
-    }
-
-    let ret = output_names.join(", ");
+    // Output stays fp16 — just reference the _f16 output directly
+    let ret_parts: Vec<String> = output_names.iter().map(|n| format!("{n}_f16")).collect();
+    let ret = ret_parts.join(", ");
     out.push_str(&format!("    }} -> ({ret});\n"));
     out.push_str("}\n");
 

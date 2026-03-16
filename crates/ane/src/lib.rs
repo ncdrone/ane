@@ -29,6 +29,7 @@ pub mod io_surface;
 mod executable;
 pub mod ops;
 pub(crate) mod request;
+pub mod neon_convert;
 mod tensor_data;
 
 pub use error::Error;
