@@ -98,14 +98,10 @@ impl TensorData {
         let element_count = self.shape.total_elements();
         self.surface.lockWithOptions_seed(IOSurfaceLockOptions(0), ptr::null_mut());
         let buf = unsafe { &mut *self.f32_buf.get() };
-        // Read current fp16 → f32 (so partial writes work correctly)
-        unsafe {
-            let src = std::slice::from_raw_parts(
-                self.surface.baseAddress().as_ptr().cast::<u16>(),
-                element_count,
-            );
-            crate::neon_convert::f16_to_f32_bulk(src, buf);
-        }
+        // NOTE: we do NOT read current surface data into the buffer.
+        // The caller must write ALL needed data before the guard is dropped.
+        // This saves one full fp16→f32 conversion per lock (massive perf win).
+        // If you need read-modify-write, use as_f32_slice() first then as_f32_slice_mut().
         LockedSliceMut {
             surface: &self.surface,
             pointer: buf.as_mut_ptr(),
