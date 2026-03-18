@@ -3,6 +3,7 @@ use crate::ops::concat::ConcatOp;
 use crate::ops::constant::ConstantOp;
 use crate::ops::conv::ConvOp;
 use crate::ops::deconv::DeconvOp;
+use crate::ops::dyn_conv::DynConvOp;
 use crate::ops::elementwise::ElementwiseOp;
 use crate::ops::flatten::FlattenOp;
 use crate::ops::inner_product::InnerProductOp;
@@ -37,6 +38,7 @@ pub enum Op {
     Transpose(TransposeOp),
     SliceBySize(SliceBySizeOp),
     ScalarOp(ScalarOp),
+    DynConv(DynConvOp),
 }
 
 impl Op {
@@ -60,6 +62,7 @@ impl Op {
             Self::Transpose(operation) => &operation.name,
             Self::SliceBySize(operation) => &operation.name,
             Self::ScalarOp(operation) => &operation.name,
+            Self::DynConv(operation) => &operation.name,
         }
     }
 
@@ -83,6 +86,7 @@ impl Op {
             Self::Transpose(operation) => &operation.top,
             Self::SliceBySize(operation) => &operation.top,
             Self::ScalarOp(operation) => &operation.top,
+            Self::DynConv(operation) => &operation.top,
         }
     }
 
@@ -106,6 +110,7 @@ impl Op {
             Self::Transpose(l) => vec![l.bottom.as_str()],
             Self::SliceBySize(l) => vec![l.bottom.as_str()],
             Self::ScalarOp(l) => vec![l.bottom.as_str()],
+            Self::DynConv(l) => vec![l.source.as_str(), l.weight_source.as_str()],
         }
     }
 }

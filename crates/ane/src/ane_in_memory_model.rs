@@ -53,6 +53,16 @@ impl ANEInMemoryModel {
         }
     }
 
+    /// Get the performance stats mask. Non-zero enables hw timing collection.
+    pub fn perf_stats_mask(&self) -> u32 {
+        unsafe { msg_send![self, perfStatsMask] }
+    }
+
+    /// Set the performance stats mask. Use 0xFFFFFFFF to enable all stats.
+    pub fn set_perf_stats_mask(&self, mask: u32) {
+        unsafe { msg_send![self, setPerfStatsMask: mask] }
+    }
+
     pub fn unload(&self, qos: NSQualityOfService) {
         let mut err: *mut NSError = std::ptr::null_mut();
         let _: Bool = unsafe { msg_send![self, unloadWithQoS: qos.0 as u32, error: &mut err] };

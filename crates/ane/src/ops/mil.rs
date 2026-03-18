@@ -145,7 +145,7 @@ fn collect_weights<'a>(layer: &'a Op, out: &mut Vec<&'a WeightBlob>) {
         Op::Matmul(_) | Op::Transpose(_) | Op::SliceBySize(_) | Op::ScalarOp(_)
         | Op::Elementwise(_) | Op::Activation(_) | Op::Softmax(_) | Op::Concat(_)
         | Op::Reshape(_) | Op::Pooling(_) | Op::Padding(_) | Op::Flatten(_)
-        | Op::Reduction(_) => {}
+        | Op::Reduction(_) | Op::DynConv(_) => {}
     }
 }
 
@@ -796,6 +796,26 @@ fn emit_layer(
             out.push_str(&format!(
                 "        tensor<fp16, {sh}> {top}_f16 = {op_str}[name = string(\"{n}\")];\n",
                 top = l.top,
+            ));
+        }
+
+        Op::DynConv(l) => {
+            let out_shape = shape_map.get(l.top.as_str()).copied().unwrap_or(Shape::channels(1));
+            let out_sh = mil_shape(out_shape);
+            let n = &l.name;
+
+            // 1x1 conv constants: no padding, stride 1, 1 group
+            emit_conv_constants(n, 0, 0, 0, 0, 1, 1, 1, 1, "valid", out);
+
+            // Reference the dynamic weight tensor variable (not a blob)
+            out.push_str(&format!(
+                "        tensor<fp16, {out_sh}> {top}_f16 = conv(\
+                 dilations = {n}_dilations, groups = {n}_groups, pad = {n}_pad, \
+                 pad_type = {n}_pad_type, strides = {n}_strides, weight = {wt}_f16, \
+                 x = {src}_f16)[name = string(\"{n}\")];\n",
+                top = l.top,
+                src = l.source,
+                wt = l.weight_source,
             ));
         }
     }

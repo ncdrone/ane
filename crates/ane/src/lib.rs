@@ -18,9 +18,11 @@
 //! executable.run(&[&input], &[&output])?;
 //! ```
 
+mod ane_client;
 mod ane_in_memory_model;
 mod ane_in_memory_model_descriptor;
 mod ane_io_surface_object;
+mod ane_performance_stats;
 mod ane_request;
 pub(crate) mod client;
 mod error;

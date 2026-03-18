@@ -1,7 +1,10 @@
+use objc2::msg_send;
 use objc2::rc::Retained;
+use objc2::runtime::AnyObject;
 use objc2_io_surface::IOSurface;
 
 use crate::ane_io_surface_object::ANEIOSurfaceObject;
+use crate::ane_performance_stats::ANEPerformanceStats;
 use crate::ane_request::ANERequest;
 use crate::Error;
 
@@ -41,5 +44,23 @@ impl Request {
             .ok_or(Error::RequestCreation)?;
 
         Ok(Self { inner })
+    }
+
+    /// Read hardware execution time from the request's attached perf stats.
+    /// Returns 0 if no stats were attached (perfStatsMask was not set on model).
+    pub fn hw_execution_time(&self) -> u64 {
+        let stats: Option<&AnyObject> = unsafe { msg_send![&*self.inner, perfStats] };
+        match stats {
+            Some(s) => unsafe { msg_send![s, hwExecutionTime] },
+            None => 0,
+        }
+    }
+
+    /// Attach a blank ANEPerformanceStats object to the request.
+    /// The ANE runtime populates it during evaluation.
+    pub fn attach_perf_stats(&self, stats: &ANEPerformanceStats) {
+        let ptr = stats as *const ANEPerformanceStats as *const AnyObject;
+        let obj: &AnyObject = unsafe { &*ptr };
+        unsafe { msg_send![&*self.inner, setPerfStats: obj] }
     }
 }

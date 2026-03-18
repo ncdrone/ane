@@ -110,5 +110,7 @@ pub(crate) fn compile_network(
         inner: model,
         qos: quality_of_service,
         cached_request: std::cell::UnsafeCell::new(None),
+        stats_request: std::cell::UnsafeCell::new(None),
+        perf_stats: std::cell::UnsafeCell::new(None),
     })
 }

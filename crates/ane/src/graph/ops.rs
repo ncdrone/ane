@@ -54,6 +54,42 @@ impl Graph {
         self.convolution_2d(source, weights, bias, &Convolution2dDescriptor::default())
     }
 
+    /// Dynamic-weight 1x1 convolution.
+    ///
+    /// Unlike `convolution_2d_1x1`, the weights come from a runtime tensor
+    /// (slice/reshape of input), not from constant data. Enables the dynamic-weight
+    /// training pattern where weights are packed into the input IOSurface.
+    ///
+    /// `source`: activation tensor [1, IC, 1, SEQ]
+    /// `weights`: dynamic weight tensor [OC, IC, 1, 1]
+    ///   (weights.shape.batch = OC, weights.shape.channels = IC)
+    /// Output: [1, OC, 1, SEQ]
+    pub fn convolution_2d_1x1_dynamic(
+        &mut self,
+        source: Tensor,
+        weights: Tensor,
+    ) -> Tensor {
+        let out_channels = weights.shape.batch;
+        let output = self.alloc(Shape {
+            batch: 1,
+            channels: out_channels,
+            height: 1,
+            width: source.shape.width,
+        });
+        self.ops.push(GraphOp {
+            op: Op::DynConv(crate::ops::dyn_conv::DynConvOp {
+                name: Self::op_name(output),
+                source: Self::tensor_name(source),
+                weight_source: Self::tensor_name(weights),
+                top: Self::tensor_name(output),
+                input_channels: source.shape.channels,
+                output_channels: out_channels,
+            }),
+            output,
+        });
+        output
+    }
+
     pub fn convolution_2d(
         &mut self,
         source: Tensor,

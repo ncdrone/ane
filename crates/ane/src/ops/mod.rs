@@ -4,6 +4,7 @@ mod constant;
 mod shape;
 mod concat;
 mod conv;
+pub(crate) mod dyn_conv;
 mod pad_mode;
 mod deconv;
 mod elementwise;
