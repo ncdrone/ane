@@ -1,5 +1,7 @@
 # ane
 
+Fork of [computer-graphics-tools/ane](https://github.com/computer-graphics-tools/ane) by [Eugene Bokhan](https://github.com/eugenebokhan), with additions for [rustane](https://github.com/ncdrone/rustane) (fp16 IOSurfaces, NEON conversion, ANE dispatch APIs).
+
 Rust bindings for Apple Neural Engine (ANE) via the private `AppleNeuralEngine.framework`.
 
 Provides a symbolic graph builder and a compile-then-run lifecycle through `_ANEInMemoryModel`, using IOSurface-backed zero-copy I/O.
