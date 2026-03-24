@@ -1,4 +1,5 @@
 use std::ffi::CString;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Once;
 
@@ -16,6 +17,7 @@ use crate::Error;
 
 static FRAMEWORK_INIT: Once = Once::new();
 static FRAMEWORK_OK: AtomicBool = AtomicBool::new(false);
+const MODEL_ARTIFACT_DIR_ENV: &str = "ANE_MODEL_ARTIFACT_DIR";
 
 fn ensure_framework() -> Result<(), Error> {
     FRAMEWORK_INIT.call_once(|| {
@@ -40,13 +42,19 @@ fn nsdata_on_surface(data: &[u8]) -> (Retained<NSData>, Retained<IOSurface>) {
     let surface = IOSurface::with_byte_count(data.len());
     surface.write_bytes(data);
     let nsdata = unsafe {
-        NSData::dataWithBytesNoCopy_length_freeWhenDone(
-            surface.baseAddress(),
-            data.len(),
-            false,
-        )
+        NSData::dataWithBytesNoCopy_length_freeWhenDone(surface.baseAddress(), data.len(), false)
     };
     (nsdata, surface)
+}
+
+fn model_artifact_dir(model: &ANEInMemoryModel) -> Option<PathBuf> {
+    std::env::var_os(MODEL_ARTIFACT_DIR_ENV)
+        .map(PathBuf::from)
+        .or_else(|| {
+            model
+                .hex_string_identifier()
+                .map(|hex_id| std::env::temp_dir().join(hex_id.to_string()))
+        })
 }
 
 pub(crate) fn compile_network(
@@ -69,10 +77,7 @@ pub(crate) fn compile_network(
         _weight_surface = Some(weight_surface);
         let offset = NSNumber::new_u64(0);
         let entry: Retained<NSDictionary<NSString, AnyObject>> = NSDictionary::from_slices(
-            &[
-                &*NSString::from_str("offset"),
-                &*NSString::from_str("data"),
-            ],
+            &[&*NSString::from_str("offset"), &*NSString::from_str("data")],
             &[
                 offset.as_ref() as &AnyObject,
                 weight_data.as_ref() as &AnyObject,
@@ -87,8 +92,7 @@ pub(crate) fn compile_network(
 
     let model = ANEInMemoryModel::with_descriptor(&descriptor).ok_or(Error::ModelCreation)?;
 
-    if let Some(hex_id) = model.hex_string_identifier() {
-        let model_dir = std::env::temp_dir().join(hex_id.to_string());
+    if let Some(model_dir) = model_artifact_dir(&model) {
         std::fs::create_dir_all(&model_dir)?;
         std::fs::write(model_dir.join("model.mil"), mil_text.as_bytes())?;
         if !weight_bytes.is_empty() {
