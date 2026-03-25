@@ -53,6 +53,19 @@ impl ANEInMemoryModel {
         }
     }
 
+    pub fn map_iosurfaces(
+        &self,
+        request: &ANERequest,
+        cache_inference: bool,
+    ) -> Result<(), Retained<NSError>> {
+        unsafe {
+            msg_send![self,
+                mapIOSurfacesWithRequest: request,
+                cacheInference: cache_inference,
+                error: _]
+        }
+    }
+
     /// Get the performance stats mask. Non-zero enables hw timing collection.
     pub fn perf_stats_mask(&self) -> u32 {
         unsafe { msg_send![self, perfStatsMask] }

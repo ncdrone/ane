@@ -4,6 +4,7 @@ use objc2::{extern_class, extern_conformance, msg_send, ClassType, Message};
 use objc2_foundation::{NSArray, NSNumber, NSObjectProtocol};
 
 use crate::ane_io_surface_object::ANEIOSurfaceObject;
+use crate::ane_performance_stats::ANEPerformanceStats;
 
 extern_class!(
     #[unsafe(super(NSObject))]
@@ -20,6 +21,7 @@ impl ANERequest {
     pub fn with_multiple_io(
         input_surfaces: &[&ANEIOSurfaceObject],
         output_surfaces: &[&ANEIOSurfaceObject],
+        perf_stats: Option<&ANEPerformanceStats>,
     ) -> Option<Retained<ANERequest>> {
         let zero = NSNumber::new_u32(0);
 
@@ -45,16 +47,27 @@ impl ANERequest {
                 .map(NSNumber::new_u32)
                 .collect::<Vec<_>>(),
         );
-
-        unsafe {
-            msg_send![Self::class(),
-                requestWithInputs: &*inputs,
-                inputIndices: &*in_indices,
-                outputs: &*outputs,
-                outputIndices: &*out_indices,
-                weightsBuffer: Option::<&AnyObject>::None,
-                perfStats: Option::<&AnyObject>::None,
-                procedureIndex: &*zero]
+        if let Some(stats) = perf_stats {
+            let ptr = stats as *const ANEPerformanceStats as *const AnyObject;
+            let perf_stats = unsafe { &*ptr };
+            unsafe {
+                msg_send![Self::class(),
+                    requestWithInputs: &*inputs,
+                    inputIndices: &*in_indices,
+                    outputs: &*outputs,
+                    outputIndices: &*out_indices,
+                    perfStats: perf_stats,
+                    procedureIndex: &*zero]
+            }
+        } else {
+            unsafe {
+                msg_send![Self::class(),
+                    requestWithInputs: &*inputs,
+                    inputIndices: &*in_indices,
+                    outputs: &*outputs,
+                    outputIndices: &*out_indices,
+                    procedureIndex: &*zero]
+            }
         }
     }
 }

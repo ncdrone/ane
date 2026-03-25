@@ -1,5 +1,7 @@
 use std::cell::UnsafeCell;
+use std::panic::AssertUnwindSafe;
 
+use objc2::exception::{self, Exception};
 use objc2::rc::Retained;
 use objc2_foundation::NSQualityOfService;
 
@@ -28,21 +30,45 @@ pub struct Executable {
 unsafe impl Send for Executable {}
 unsafe impl Sync for Executable {}
 
+fn objc_exception_error(context: &str, exception: Option<Retained<Exception>>) -> Error {
+    let detail = exception
+        .map(|exception| format!("{exception:?}"))
+        .unwrap_or_else(|| "unknown Objective-C exception".into());
+    Error::Evaluate(format!("{context}: {detail}"))
+}
+
 impl Executable {
+    fn cached_request_for(
+        &self,
+        cache: &UnsafeCell<Option<Request>>,
+        inputs: &[&TensorData],
+        outputs: &[&TensorData],
+    ) -> Result<&Request, Error> {
+        let cached = unsafe { &mut *cache.get() };
+        if cached.is_none() {
+            let input_surfaces: Vec<&objc2_io_surface::IOSurface> =
+                inputs.iter().map(|td| td.surface()).collect();
+            let output_surfaces: Vec<&objc2_io_surface::IOSurface> =
+                outputs.iter().map(|td| td.surface()).collect();
+            *cached = Some(Request::new(&input_surfaces, &output_surfaces)?);
+        }
+        Ok(cached.as_ref().unwrap())
+    }
+
     /// Run the compiled program on the ANE.
     ///
     /// `inputs` and `outputs` are positional [`TensorData`] arrays matching the
     /// order of [`placeholder`](crate::Graph::placeholder) calls and output tensors
     /// in the graph.
-    pub fn run(
-        &self,
-        inputs: &[&TensorData],
-        outputs: &[&TensorData],
-    ) -> Result<(), Error> {
-        let input_surfaces: Vec<&objc2_io_surface::IOSurface> =
-            inputs.iter().map(|tensor_data| tensor_data.surface()).collect();
-        let output_surfaces: Vec<&objc2_io_surface::IOSurface> =
-            outputs.iter().map(|tensor_data| tensor_data.surface()).collect();
+    pub fn run(&self, inputs: &[&TensorData], outputs: &[&TensorData]) -> Result<(), Error> {
+        let input_surfaces: Vec<&objc2_io_surface::IOSurface> = inputs
+            .iter()
+            .map(|tensor_data| tensor_data.surface())
+            .collect();
+        let output_surfaces: Vec<&objc2_io_surface::IOSurface> = outputs
+            .iter()
+            .map(|tensor_data| tensor_data.surface())
+            .collect();
         let request = Request::new(&input_surfaces, &output_surfaces)?;
         self.inner
             .evaluate(self.qos, &request.inner)
@@ -60,26 +86,37 @@ impl Executable {
     /// every call. The IOSurface backing buffers may be mutated between calls
     /// (that's the dynamic-weight pattern), but the TensorData/IOSurface
     /// objects themselves must be the same.
-    pub fn run_cached(
+    pub fn run_cached(&self, inputs: &[&TensorData], outputs: &[&TensorData]) -> Result<(), Error> {
+        // SAFETY: Executable is not Sync for concurrent mutation — single-threaded
+        // access to cached_request is guaranteed by the borrow of &self in the
+        // training loop (one dispatch at a time).
+        let request = self.cached_request_for(&self.cached_request, inputs, outputs)?;
+        self.inner
+            .evaluate(self.qos, &request.inner)
+            .map_err(|error| Error::Evaluate(error.localizedDescription().to_string()))
+    }
+
+    /// Pre-map the cached request's IOSurfaces through `_ANEProgramIOSurfacesMapper`.
+    ///
+    /// Uses the same safety contract as [`run_cached`](Self::run_cached): the
+    /// same input and output TensorData objects must be reused for subsequent
+    /// dispatches.
+    pub fn pre_map_request(
         &self,
         inputs: &[&TensorData],
         outputs: &[&TensorData],
     ) -> Result<(), Error> {
-        // SAFETY: Executable is not Sync for concurrent mutation — single-threaded
-        // access to cached_request is guaranteed by the borrow of &self in the
-        // training loop (one dispatch at a time).
-        let cached = unsafe { &mut *self.cached_request.get() };
-        if cached.is_none() {
-            let input_surfaces: Vec<&objc2_io_surface::IOSurface> =
-                inputs.iter().map(|td| td.surface()).collect();
-            let output_surfaces: Vec<&objc2_io_surface::IOSurface> =
-                outputs.iter().map(|td| td.surface()).collect();
-            *cached = Some(Request::new(&input_surfaces, &output_surfaces)?);
+        let request = self.cached_request_for(&self.cached_request, inputs, outputs)?;
+        match exception::catch(AssertUnwindSafe(|| {
+            self.inner.map_iosurfaces(&request.inner, true)
+        })) {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(error)) => Err(Error::Evaluate(error.localizedDescription().to_string())),
+            Err(exception) => Err(objc_exception_error(
+                "mapIOSurfacesWithRequest:cacheInference:error: threw",
+                exception,
+            )),
         }
-        let request = cached.as_ref().unwrap();
-        self.inner
-            .evaluate(self.qos, &request.inner)
-            .map_err(|error| Error::Evaluate(error.localizedDescription().to_string()))
     }
 
     /// Run the compiled program with hardware performance stats collection.
@@ -100,25 +137,61 @@ impl Executable {
         if cached_req.is_none() {
             // Enable hardware timing collection (bit 0 = hw execution time)
             self.inner.set_perf_stats_mask(0x1);
+            if self.inner.perf_stats_mask() & 0x1 == 0 {
+                return Err(Error::Evaluate(
+                    "failed to enable ANE performance stats mask".into(),
+                ));
+            }
+            self.inner.unload(self.qos);
+            self.inner
+                .load(self.qos)
+                .map_err(|error| Error::Load(error.localizedDescription().to_string()))?;
 
             // Create a blank stats object and attach it to the request
-            let stats = ANEPerformanceStats::new()
-                .ok_or(Error::Evaluate("failed to create ANEPerformanceStats".into()))?;
+            let stats = ANEPerformanceStats::new().ok_or(Error::Evaluate(
+                "failed to create ANEPerformanceStats".into(),
+            ))?;
             let input_surfaces: Vec<&objc2_io_surface::IOSurface> =
                 inputs.iter().map(|td| td.surface()).collect();
             let output_surfaces: Vec<&objc2_io_surface::IOSurface> =
                 outputs.iter().map(|td| td.surface()).collect();
-            let req = Request::new(&input_surfaces, &output_surfaces)?;
-            req.attach_perf_stats(&stats);
+            let req = match exception::catch(AssertUnwindSafe(|| {
+                Request::new(&input_surfaces, &output_surfaces)
+            })) {
+                Ok(result) => result?,
+                Err(exception) => {
+                    return Err(objc_exception_error(
+                        "stats-enabled ANERequest creation threw",
+                        exception,
+                    ));
+                }
+            };
+            match exception::catch(AssertUnwindSafe(|| req.attach_perf_stats(&stats))) {
+                Ok(()) => {}
+                Err(exception) => {
+                    return Err(objc_exception_error("setPerfStats: threw", exception));
+                }
+            }
             *cached_req = Some(req);
             *cached_stats = Some(stats);
         }
 
         let request = cached_req.as_ref().unwrap();
 
-        self.inner
-            .evaluate(self.qos, &request.inner)
-            .map_err(|error| Error::Evaluate(error.localizedDescription().to_string()))?;
+        match exception::catch(AssertUnwindSafe(|| {
+            self.inner.evaluate(self.qos, &request.inner)
+        })) {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                return Err(Error::Evaluate(error.localizedDescription().to_string()));
+            }
+            Err(exception) => {
+                return Err(objc_exception_error(
+                    "evaluateWithQoS:options:request:error: with perf stats threw",
+                    exception,
+                ));
+            }
+        }
 
         // Read hw time from the stats object attached to the request
         Ok(request.hw_execution_time())
@@ -133,17 +206,10 @@ impl Executable {
         inputs: &[&TensorData],
         outputs: &[&TensorData],
     ) -> Result<(), Error> {
-        let cached = unsafe { &mut *self.cached_request.get() };
-        if cached.is_none() {
-            let input_surfaces: Vec<&objc2_io_surface::IOSurface> =
-                inputs.iter().map(|td| td.surface()).collect();
-            let output_surfaces: Vec<&objc2_io_surface::IOSurface> =
-                outputs.iter().map(|td| td.surface()).collect();
-            *cached = Some(Request::new(&input_surfaces, &output_surfaces)?);
-        }
-        let request = cached.as_ref().unwrap();
-        let client = ANEClient::shared_connection()
-            .ok_or(Error::Evaluate("failed to get ANEClient shared connection".into()))?;
+        let request = self.cached_request_for(&self.cached_request, inputs, outputs)?;
+        let client = ANEClient::shared_connection().ok_or(Error::Evaluate(
+            "failed to get ANEClient shared connection".into(),
+        ))?;
         client
             .evaluate_direct(&self.inner, &request.inner, self.qos.0 as u32)
             .map_err(|error| Error::Evaluate(error.localizedDescription().to_string()))

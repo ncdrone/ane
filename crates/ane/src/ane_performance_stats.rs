@@ -19,7 +19,9 @@ impl ANEPerformanceStats {
     /// The ANE runtime populates it during evaluation when perfStatsMask is set.
     pub fn new() -> Option<Retained<ANEPerformanceStats>> {
         let zero: u64 = 0;
-        unsafe { msg_send![Self::class(), statsWithHardwareExecutionNS: zero] }
+        let stats: *mut ANEPerformanceStats =
+            unsafe { msg_send![Self::class(), statsWithHardwareExecutionNS: zero] };
+        unsafe { Retained::retain_autoreleased(stats) }
     }
 
     /// Hardware execution time in nanoseconds, measured by the ANE hardware.

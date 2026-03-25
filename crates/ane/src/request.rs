@@ -25,6 +25,14 @@ impl Request {
     ///
     /// Surface order must match the order of input and output blobs in the compiled network.
     pub fn new(inputs: &[&IOSurface], outputs: &[&IOSurface]) -> Result<Self, Error> {
+        Self::new_with_perf_stats(inputs, outputs, None)
+    }
+
+    pub(crate) fn new_with_perf_stats(
+        inputs: &[&IOSurface],
+        outputs: &[&IOSurface],
+        perf_stats: Option<&ANEPerformanceStats>,
+    ) -> Result<Self, Error> {
         let input_objs = inputs
             .iter()
             .map(|surface| ANEIOSurfaceObject::with_io_surface(surface))
@@ -37,10 +45,12 @@ impl Request {
             .collect::<Option<Vec<_>>>()
             .ok_or(Error::SurfaceWrap)?;
 
-        let input_refs: Vec<&ANEIOSurfaceObject> = input_objs.iter().map(|object| &**object).collect();
-        let output_refs: Vec<&ANEIOSurfaceObject> = output_objs.iter().map(|object| &**object).collect();
+        let input_refs: Vec<&ANEIOSurfaceObject> =
+            input_objs.iter().map(|object| &**object).collect();
+        let output_refs: Vec<&ANEIOSurfaceObject> =
+            output_objs.iter().map(|object| &**object).collect();
 
-        let inner = ANERequest::with_multiple_io(&input_refs, &output_refs)
+        let inner = ANERequest::with_multiple_io(&input_refs, &output_refs, perf_stats)
             .ok_or(Error::RequestCreation)?;
 
         Ok(Self { inner })
@@ -51,7 +61,10 @@ impl Request {
     pub fn hw_execution_time(&self) -> u64 {
         let stats: Option<&AnyObject> = unsafe { msg_send![&*self.inner, perfStats] };
         match stats {
-            Some(s) => unsafe { msg_send![s, hwExecutionTime] },
+            Some(stats) => {
+                let ptr = stats as *const AnyObject as *const ANEPerformanceStats;
+                unsafe { (&*ptr).hw_execution_time() }
+            }
             None => 0,
         }
     }
